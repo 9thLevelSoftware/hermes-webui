@@ -100,8 +100,11 @@ async function _savedSessionSidebarOnlyState(sid){
 
 // ── Mobile navigation ──────────────────────────────────────────────────────
 // URL prefill boot helpers.
+function _prefillHasDraftText(prefillIntent){
+  return !!(prefillIntent&&prefillIntent.hasText);
+}
 function _rootPrefillNeedsFreshComposer(urlSession, savedLocal, prefillIntent){
-  return !urlSession&&!!savedLocal&&!!(prefillIntent&&prefillIntent.hasText);
+  return !urlSession&&!!savedLocal&&_prefillHasDraftText(prefillIntent);
 }
 async function _applyComposerPrefillOnBoot(prefillIntent){
   if(!prefillIntent||!prefillIntent.hasText) return;
@@ -111,6 +114,12 @@ async function _applyComposerPrefillOnBoot(prefillIntent){
   msg.value=text;
   if(typeof autoResize==='function') autoResize();
   else if(typeof updateSendBtn==='function') updateSendBtn();
+}
+async function _finalizeComposerPrefillOnBoot(prefillIntent){
+  if(prefillIntent&&prefillIntent.hasParams&&typeof _consumeComposerPrefillParamsFromLocation==='function'){
+    _consumeComposerPrefillParamsFromLocation();
+  }
+  await _applyComposerPrefillOnBoot(prefillIntent);
 }
 
 // Mobile navigation.
@@ -239,7 +248,8 @@ function handleWorkspaceClose(){
   closeWorkspacePanel();
 }
 
-async function _maybeBindFreshDefaultWorkspaceSession(){
+async function _maybeBindFreshDefaultWorkspaceSession(prefillIntent=null){
+  if(_prefillHasDraftText(prefillIntent)) return false;
   if(S.session) return false;
   if(_workspacePanelMode!=='browse') return false;
   if(!S._profileDefaultWorkspace) return false;
@@ -2387,9 +2397,6 @@ window._applyTitlebarProfileVisibility=_applyTitlebarProfileVisibility;
   // Load send key preference
   let _bootSettings={};
   const prefillIntent=(typeof _composerPrefillIntentFromLocation==='function')?_composerPrefillIntentFromLocation():null;
-  if(prefillIntent&&prefillIntent.hasParams&&typeof _consumeComposerPrefillParamsFromLocation==='function'){
-    _consumeComposerPrefillParamsFromLocation();
-  }
   try{
     const s=await api('/api/settings');
     _bootSettings=s;
@@ -2777,7 +2784,7 @@ window._applyTitlebarProfileVisibility=_applyTitlebarProfileVisibility;
       await newSession(true);
       if(S.session) await _startBootModelDropdown();
       S._bootReady=true;
-      syncTopbar();syncWorkspacePanelState();await renderSessionList();await _applyComposerPrefillOnBoot(prefillIntent);if(typeof startGatewaySSE==='function')startGatewaySSE();return;
+      syncTopbar();syncWorkspacePanelState();await renderSessionList();await _finalizeComposerPrefillOnBoot(prefillIntent);if(typeof startGatewaySSE==='function')startGatewaySSE();return;
     }catch(e){console.warn('[pwa] new-chat launch action failed', e);}
   }
   const savedLocal=localStorage.getItem('hermes-webui-session');
@@ -2795,7 +2802,7 @@ window._applyTitlebarProfileVisibility=_applyTitlebarProfileVisibility;
         S._bootReady=true;
         syncTopbar();syncWorkspacePanelState();
         $('emptyState').style.display='';
-        await renderSessionList();await _applyComposerPrefillOnBoot(prefillIntent);if(typeof startGatewaySSE==='function')startGatewaySSE();
+        await renderSessionList();await _finalizeComposerPrefillOnBoot(prefillIntent);if(typeof startGatewaySSE==='function')startGatewaySSE();
         return;
       }
       if(_rootPrefillNeedsFreshComposer(urlSession, savedLocal, prefillIntent)){
@@ -2804,10 +2811,10 @@ window._applyTitlebarProfileVisibility=_applyTitlebarProfileVisibility;
         const _ephPanelPref=localStorage.getItem('hermes-webui-workspace-panel-pref')==='open'
           || localStorage.getItem('hermes-webui-workspace-panel')==='open';
         if(_ephPanelPref&&!_isCompactWorkspaceViewport()) _workspacePanelMode='browse';
-        await _maybeBindFreshDefaultWorkspaceSession();
+        await _maybeBindFreshDefaultWorkspaceSession(prefillIntent);
         syncTopbar();syncWorkspacePanelState();
         $('emptyState').style.display='';
-        await renderSessionList();await _applyComposerPrefillOnBoot(prefillIntent);if(typeof startGatewaySSE==='function')startGatewaySSE();
+        await renderSessionList();await _finalizeComposerPrefillOnBoot(prefillIntent);if(typeof startGatewaySSE==='function')startGatewaySSE();
         return;
       }
       await loadSession(saved, {preserveActiveInput:true});
@@ -2842,10 +2849,10 @@ window._applyTitlebarProfileVisibility=_applyTitlebarProfileVisibility;
         const _ephPanelPref=localStorage.getItem('hermes-webui-workspace-panel-pref')==='open'
           || localStorage.getItem('hermes-webui-workspace-panel')==='open';
         if(_ephPanelPref&&!_isCompactWorkspaceViewport()) _workspacePanelMode='browse';
-        await _maybeBindFreshDefaultWorkspaceSession();
+        await _maybeBindFreshDefaultWorkspaceSession(prefillIntent);
         syncTopbar();syncWorkspacePanelState();
         $('emptyState').style.display='';
-        await renderSessionList();await _applyComposerPrefillOnBoot(prefillIntent);if(typeof startGatewaySSE==='function')startGatewaySSE();
+        await renderSessionList();await _finalizeComposerPrefillOnBoot(prefillIntent);if(typeof startGatewaySSE==='function')startGatewaySSE();
         return;
       }
       // Restore the panel from localStorage when the session has a workspace.
@@ -2857,7 +2864,7 @@ window._applyTitlebarProfileVisibility=_applyTitlebarProfileVisibility;
         _workspacePanelMode='browse';
       }
       S._bootReady=true;
-      syncTopbar();syncWorkspacePanelState();await renderSessionList();if(typeof startGatewaySSE==='function')startGatewaySSE();await checkInflightOnBoot(saved);await _applyComposerPrefillOnBoot(prefillIntent);return;}
+      syncTopbar();syncWorkspacePanelState();await renderSessionList();if(typeof startGatewaySSE==='function')startGatewaySSE();await checkInflightOnBoot(saved);await _finalizeComposerPrefillOnBoot(prefillIntent);return;}
     catch(e){localStorage.removeItem('hermes-webui-session');}
   }
   // no saved session - show empty state, wait for user to hit +
@@ -2868,10 +2875,10 @@ window._applyTitlebarProfileVisibility=_applyTitlebarProfileVisibility;
   const _freshPanelPref=localStorage.getItem('hermes-webui-workspace-panel-pref')==='open'
     || localStorage.getItem('hermes-webui-workspace-panel')==='open';
   if(_freshPanelPref&&!_isCompactWorkspaceViewport()) _workspacePanelMode='browse';
-  await _maybeBindFreshDefaultWorkspaceSession();
+  await _maybeBindFreshDefaultWorkspaceSession(prefillIntent);
   syncWorkspacePanelState();
   $('emptyState').style.display='';
-  await renderSessionList();await _applyComposerPrefillOnBoot(prefillIntent);
+  await renderSessionList();await _finalizeComposerPrefillOnBoot(prefillIntent);
   // Start real-time gateway session sync if setting is enabled
   if(typeof startGatewaySSE==='function') startGatewaySSE();
 })().catch(e=>{

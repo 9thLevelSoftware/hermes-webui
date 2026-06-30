@@ -127,6 +127,7 @@ console.log(JSON.stringify({ cleaned, promoted }));
 
 def test_root_prefill_keeps_saved_local_sidebar_only():
     source = _node_prelude() + """
+evalBoot('_prefillHasDraftText');
 evalBoot('_rootPrefillNeedsFreshComposer');
 const result = {
   savedLocalWins: _rootPrefillNeedsFreshComposer(null, 'saved-local', { hasText: true }),
@@ -153,6 +154,31 @@ console.log(JSON.stringify(result));
     assert saved_guard > saved_state_pos
     assert prefill_guard > saved_guard
     assert load_pos > prefill_guard
+
+
+def test_fresh_default_workspace_bind_skips_prefill_draft_boot():
+    source = _node_prelude() + """
+(async () => {
+  evalBoot('_prefillHasDraftText');
+  evalBoot('_maybeBindFreshDefaultWorkspaceSession');
+  global.S = { session: null, _profileDefaultWorkspace: 'D:/workspace' };
+  global._workspacePanelMode = 'browse';
+  const calls = [];
+  global.newSession = async () => { calls.push('newSession'); };
+  const skipped = await _maybeBindFreshDefaultWorkspaceSession({ hasText: true });
+  const bound = await _maybeBindFreshDefaultWorkspaceSession({ hasText: false });
+  console.log(JSON.stringify({ skipped, bound, calls }));
+})().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
+"""
+    payload = json.loads(_run_node(source))
+    assert payload == {
+        "skipped": False,
+        "bound": True,
+        "calls": ["newSession"],
+    }
 
 
 def test_apply_prefill_updates_composer_without_autosending():
@@ -185,6 +211,42 @@ def test_apply_prefill_updates_composer_without_autosending():
     assert payload["value"] == "second pass"
 
 
+def test_terminal_prefill_step_consumes_params_after_boot_state_is_ready():
+    source = _node_prelude() + """
+(async () => {
+  evalBoot('_applyComposerPrefillOnBoot');
+  evalBoot('_finalizeComposerPrefillOnBoot');
+  const counts = { autoResize: 0, updateSendBtn: 0, consume: 0, send: 0 };
+  const msg = { value: '' };
+  global.document = {
+    getElementById(id) {
+      return id === 'msg' ? msg : null;
+    }
+  };
+  global.$ = (id) => document.getElementById(id);
+  global.autoResize = () => { counts.autoResize++; };
+  global.updateSendBtn = () => { counts.updateSendBtn++; };
+  global.send = async () => { counts.send++; };
+  global._consumeComposerPrefillParamsFromLocation = () => { counts.consume++; };
+  await _finalizeComposerPrefillOnBoot({ hasParams: true, hasText: true, text: 'hello world', autoSend: false });
+  delete global.autoResize;
+  await _finalizeComposerPrefillOnBoot({ hasParams: false, hasText: true, text: 'second pass', autoSend: false });
+  console.log(JSON.stringify({ counts, value: msg.value }));
+})().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
+"""
+    payload = json.loads(_run_node(source))
+    assert payload["counts"] == {
+        "autoResize": 1,
+        "updateSendBtn": 1,
+        "consume": 1,
+        "send": 0,
+    }
+    assert payload["value"] == "second pass"
+
+
 def test_explicit_session_url_keeps_target_session_with_prefill():
     source = _node_prelude() + """
 global.window = {
@@ -195,6 +257,7 @@ global.window = {
   }
 };
 evalSession('_sessionIdFromLocation');
+evalBoot('_prefillHasDraftText');
 evalBoot('_rootPrefillNeedsFreshComposer');
 console.log(JSON.stringify({
   urlSession: _sessionIdFromLocation(),
@@ -212,6 +275,7 @@ global.window = {
   }
 };
 evalSession('_sessionIdFromLocation');
+evalBoot('_prefillHasDraftText');
 evalBoot('_rootPrefillNeedsFreshComposer');
 console.log(JSON.stringify({
   urlSession: _sessionIdFromLocation(),
@@ -223,22 +287,26 @@ console.log(JSON.stringify({
     prefill_pos = BOOT_JS.find(
         "const prefillIntent=(typeof _composerPrefillIntentFromLocation==='function')?_composerPrefillIntentFromLocation():null;"
     )
-    consume_pos = BOOT_JS.find("_consumeComposerPrefillParamsFromLocation();", prefill_pos)
-    first_await_pos = BOOT_JS.find("const s=await api('/api/settings');", consume_pos)
-    new_pos = BOOT_JS.find("await newSession(true);", consume_pos)
-    load_pos = BOOT_JS.find("await loadSession(saved, {preserveActiveInput:true});", consume_pos)
+    first_await_pos = BOOT_JS.find("const s=await api('/api/settings');", prefill_pos)
+    active_profile_pos = BOOT_JS.find(
+        "const activeProfileState = await _resolveActiveProfileBootstrapState();",
+        first_await_pos,
+    )
+    new_pos = BOOT_JS.find("await newSession(true);", active_profile_pos)
+    load_pos = BOOT_JS.find("await loadSession(saved, {preserveActiveInput:true});", active_profile_pos)
     saved_pos = BOOT_JS.find("const saved=urlSession||savedLocal;")
     check_pos = BOOT_JS.find("await checkInflightOnBoot(saved);", load_pos)
-    apply_pos = BOOT_JS.find("await _applyComposerPrefillOnBoot(prefillIntent);", check_pos)
+    apply_pos = BOOT_JS.find("await _finalizeComposerPrefillOnBoot(prefillIntent);", check_pos)
     assert saved_pos >= 0
     assert prefill_pos >= 0
-    assert consume_pos > prefill_pos
-    assert 0 <= consume_pos < first_await_pos
-    assert 0 <= consume_pos < new_pos
-    assert 0 <= consume_pos < load_pos
+    assert active_profile_pos > first_await_pos
+    assert "_consumeComposerPrefillParamsFromLocation();" not in BOOT_JS[prefill_pos:first_await_pos]
+    assert 0 <= active_profile_pos < new_pos
+    assert 0 <= active_profile_pos < load_pos
     assert 0 <= check_pos < apply_pos
+    assert BOOT_JS.find("await _maybeBindFreshDefaultWorkspaceSession(prefillIntent);", prefill_pos) > prefill_pos
     zero_message_pos = BOOT_JS.find(
-        "await renderSessionList();await _applyComposerPrefillOnBoot(prefillIntent);if(typeof startGatewaySSE==='function')startGatewaySSE();",
+        "await renderSessionList();await _finalizeComposerPrefillOnBoot(prefillIntent);if(typeof startGatewaySSE==='function')startGatewaySSE();",
         load_pos,
     )
     assert zero_message_pos > load_pos
