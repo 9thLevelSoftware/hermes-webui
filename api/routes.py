@@ -5813,6 +5813,63 @@ def _read_profile_model_config(
     return _provider, _default
 
 
+def _repair_bare_custom_provider_model(
+    bare_model: str,
+    provider: str | None,
+) -> str | None:
+    """Re-qualify a bare model ID using the named custom provider's config (#5314).
+
+    Returns the fully namespaced model id when ``bare_model`` matches the suffix
+    of a registered id on ``custom_providers``; otherwise None. Model ids are
+    scanned in config declaration order (default ``model`` first, then
+    ``models`` dict keys) so repair is deterministic when suffixes collide.
+    """
+    model = str(bare_model or "").strip()
+    prov = _clean_session_model_provider(provider)
+    if not model or "/" in model or not prov:
+        return None
+    if prov != "custom" and not str(prov).startswith("custom:"):
+        return None
+    try:
+        from api.config import cfg as _active_cfg
+
+        _custom_cfg = (
+            _active_cfg.get("custom_providers", [])
+            if isinstance(_active_cfg, dict)
+            else []
+        )
+    except Exception:
+        return None
+    _cp_name = prov.split(":", 1)[1] if ":" in prov else ""
+    if not _cp_name or not isinstance(_custom_cfg, list):
+        return None
+    _matching_cp = None
+    for _entry in _custom_cfg:
+        if (
+            isinstance(_entry, dict)
+            and _entry.get("name", "").strip().lower() == _cp_name.lower()
+        ):
+            _matching_cp = _entry
+            break
+    if not _matching_cp:
+        return None
+    _ordered_ids: list[str] = []
+    _cp_model = (_matching_cp.get("model") or "").strip()
+    if _cp_model:
+        _ordered_ids.append(_cp_model)
+    _cp_models = _matching_cp.get("models")
+    if isinstance(_cp_models, dict):
+        for _key in _cp_models.keys():
+            if isinstance(_key, str) and _key.strip():
+                _kid = _key.strip()
+                if _kid not in _ordered_ids:
+                    _ordered_ids.append(_kid)
+    for _id in _ordered_ids:
+        if "/" in _id and _id.rsplit("/", 1)[-1] == model:
+            return _id
+    return None
+
+
 def _resolve_compatible_session_model_state(
     model_id: str | None,
     model_provider: str | None = None,
@@ -5893,45 +5950,9 @@ def _resolve_compatible_session_model_state(
             ):
                 return _profile_default, requested_provider, True
 
-            # Dynamic custom provider model repair: search the active custom provider's
-            # configured models list to resolve the fully qualified name of a bare model.
-            _repaired_model = None
-            if (
-                "/" not in model
-                and (
-                    requested_provider == "custom"
-                    or str(requested_provider).startswith("custom:")
-                )
-            ):
-                try:
-                    from api.config import cfg as _active_cfg
-                    _custom_cfg = _active_cfg.get("custom_providers", []) if isinstance(_active_cfg, dict) else []
-                    _cp_name = requested_provider.split(":", 1)[1] if ":" in requested_provider else ""
-                    _matching_cp = None
-                    if isinstance(_custom_cfg, list) and _cp_name:
-                        for _entry in _custom_cfg:
-                            if isinstance(_entry, dict) and _entry.get("name", "").strip().lower() == _cp_name.lower():
-                                _matching_cp = _entry
-                                break
-                    if _matching_cp:
-                        _cp_model = (_matching_cp.get("model") or "").strip()
-                        _cp_model_ids = set()
-                        if _cp_model:
-                            _cp_model_ids.add(_cp_model)
-                        _cp_models = _matching_cp.get("models")
-                        if isinstance(_cp_models, dict):
-                            _cp_model_ids.update(
-                                _key.strip()
-                                for _key in _cp_models.keys()
-                                if isinstance(_key, str) and _key.strip()
-                            )
-                        for _id in _cp_model_ids:
-                            if "/" in _id and _id.rsplit("/", 1)[-1] == model:
-                                _repaired_model = _id
-                                break
-                except Exception:
-                    pass
-
+            _repaired_model = _repair_bare_custom_provider_model(
+                model, requested_provider
+            )
             if _repaired_model:
                 return _repaired_model, requested_provider, True
 
@@ -6034,45 +6055,7 @@ def _resolve_compatible_session_model_state(
         ):
             return _profile_default, profile_provider, True
 
-        # Dynamic custom provider model repair: search the active profile custom provider's
-        # configured models list to resolve the fully qualified name of a bare model.
-        _repaired_model = None
-        if (
-            "/" not in model
-            and (
-                _profile_provider_normalized == "custom"
-                or str(profile_provider).startswith("custom:")
-            )
-        ):
-            try:
-                from api.config import cfg as _active_cfg
-                _custom_cfg = _active_cfg.get("custom_providers", []) if isinstance(_active_cfg, dict) else []
-                _cp_name = profile_provider.split(":", 1)[1] if ":" in profile_provider else ""
-                _matching_cp = None
-                if isinstance(_custom_cfg, list) and _cp_name:
-                    for _entry in _custom_cfg:
-                        if isinstance(_entry, dict) and _entry.get("name", "").strip().lower() == _cp_name.lower():
-                            _matching_cp = _entry
-                            break
-                if _matching_cp:
-                    _cp_model = (_matching_cp.get("model") or "").strip()
-                    _cp_model_ids = set()
-                    if _cp_model:
-                        _cp_model_ids.add(_cp_model)
-                    _cp_models = _matching_cp.get("models")
-                    if isinstance(_cp_models, dict):
-                        _cp_model_ids.update(
-                            _key.strip()
-                            for _key in _cp_models.keys()
-                            if isinstance(_key, str) and _key.strip()
-                        )
-                    for _id in _cp_model_ids:
-                        if "/" in _id and _id.rsplit("/", 1)[-1] == model:
-                            _repaired_model = _id
-                            break
-            except Exception:
-                pass
-
+        _repaired_model = _repair_bare_custom_provider_model(model, profile_provider)
         if _repaired_model:
             return _repaired_model, profile_provider, True
 

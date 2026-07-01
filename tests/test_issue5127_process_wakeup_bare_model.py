@@ -210,6 +210,23 @@ class TestIssue5127CustomProviderBareSuffixRepair:
         assert result[2] is True
 
 
+class TestRepairBareCustomProviderModel:
+    def test_uses_config_order_when_suffixes_collide(self):
+        from api.routes import _repair_bare_custom_provider_model
+
+        custom_cfg = [
+            {
+                "name": "llm-proxy",
+                "model": "org-a/shared-suffix",
+                "models": {"org-b/shared-suffix": {}},
+            }
+        ]
+        with patch("api.config.cfg", {"custom_providers": custom_cfg}):
+            assert _repair_bare_custom_provider_model(
+                "shared-suffix", "custom:llm-proxy"
+            ) == "org-a/shared-suffix"
+
+
 class TestReadProfileModelConfigWithExplicitProvider:
     def test_returns_profile_default_when_session_has_model_provider(self, tmp_path, monkeypatch):
         from api.routes import _read_profile_model_config
