@@ -177,6 +177,22 @@ def test_node_missing_server_version_no_banner():
     assert result["display"] != "flex", f"Banner wrongly shown for missing server version: {result}"
 
 
+def test_node_unknown_server_version_no_banner():
+    """A server that reports webui_version='unknown' (git-describe failure in a
+    Docker/CI image, api/updates.py) must NOT falsely fire the stale-client
+    banner against a real client version. (Codex #5480 gate)"""
+    helpers = _extract_skew_helpers(PANELS_JS.read_text(encoding="utf-8"))
+    for server_val in ("unknown", "UNKNOWN", "Unknown"):
+        result = _run_harness(
+            _make_stub("v1"),
+            helpers,
+            f'checkWebUIVersionSkew({{ webui_version: "{server_val}" }});',
+        )
+        assert result["display"] != "flex", (
+            f"Banner wrongly shown for server version {server_val!r}: {result}"
+        )
+
+
 def test_node_placeholder_client_version_no_banner():
     """Unresolved __WEBUI_VERSION__ literal as bundle stamp keeps banner hidden."""
     helpers = _extract_skew_helpers(PANELS_JS.read_text(encoding="utf-8"))

@@ -2302,7 +2302,14 @@ async function hardRefreshWebUIClient(){
 function _normalizeWebUIVersion(value){
   if(!value) return '';
   const s=String(value).trim();
-  if(!s||s==='__WEBUI_VERSION__'||s==='not detected') return '';
+  if(!s) return '';
+  // Suppress placeholder / non-version sentinels (case-insensitive) so a real
+  // client version never "mismatches" against a server that couldn't detect its
+  // own version. api/updates.py can emit 'unknown' (git describe failure in a
+  // Docker/CI image); comparing a real version against 'unknown' would FALSELY
+  // fire the stale-client banner. (Codex #5480 gate)
+  const lower=s.toLowerCase();
+  if(lower==='__webui_version__'||lower==='not detected'||lower==='unknown') return '';
   return s;
 }
 
