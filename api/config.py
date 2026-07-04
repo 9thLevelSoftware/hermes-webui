@@ -2522,14 +2522,20 @@ def resolve_model_provider(model_id: str) -> tuple:
     )
     _default_model = model_cfg.get('default') if isinstance(model_cfg, dict) else None
     # Owns model if it appears in the static catalog for the configured provider.
+    # _PROVIDER_MODELS is keyed by CANONICAL slug (e.g. 'zai', not the 'z-ai'
+    # alias a user may write in config), so canonicalise config_provider before
+    # the lookup — otherwise an aliased active provider gets an empty ownership
+    # set and _skip_custom_providers guard-2 silently fails, letting another
+    # providers.<slug>.models entry hijack an active-owned model (#5511).
+    _canon_config_provider = _canonicalise_provider_id(config_provider) if config_provider else ""
     _provider_models_set: set[str] = set()
     if (
-        config_provider is not None
-        and config_provider in _PROVIDER_MODELS
-        and isinstance(_PROVIDER_MODELS[config_provider], list)
+        _canon_config_provider
+        and _canon_config_provider in _PROVIDER_MODELS
+        and isinstance(_PROVIDER_MODELS[_canon_config_provider], list)
     ):
         _provider_models_set = {
-            m.get('id', '') for m in _PROVIDER_MODELS[config_provider]
+            m.get('id', '') for m in _PROVIDER_MODELS[_canon_config_provider]
             if isinstance(m, dict) and isinstance(m.get('id'), str)
         }
     _skip_custom_providers = (
@@ -2577,7 +2583,7 @@ def resolve_model_provider(model_id: str) -> tuple:
         # active provider (#5511 gate finding — e.g. active ai-gateway + default
         # gpt-5 was being pulled to providers.openai.models.gpt-5). In that case
         # restrict the scan to the active provider's own canonical slug.
-        _active_slug = _canonicalise_provider_id(config_provider) if config_provider else ""
+        _active_slug = _canon_config_provider
         for slug, pdef in providers_cfg.items():
             if not isinstance(pdef, dict):
                 continue

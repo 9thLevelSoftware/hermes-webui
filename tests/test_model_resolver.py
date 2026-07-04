@@ -845,3 +845,29 @@ def test_providers_scan_active_provider_own_entry_still_matches_5511():
     )
     assert provider == 'myprov', f"active provider's own entry must match; got {provider!r}"
     assert base_url == 'https://my.example/v1'
+
+
+def test_providers_scan_ownership_guard_canonicalises_aliased_active_provider_5511():
+    """An ALIASED active provider (e.g. 'z-ai' → canonical 'zai') must still be
+    recognized as owning its catalog models, so another providers.<slug>.models
+    entry can't hijack an active-owned model (#5511 latent-bug gate finding —
+    _provider_models_set was built with the raw alias, missing the canonical
+    _PROVIDER_MODELS key, so the ownership guard silently failed)."""
+    import api.config as config
+    # Pick a real catalog model id owned by the canonical 'zai' provider.
+    zai_models = config._PROVIDER_MODELS.get('zai') or []
+    zai_ids = [m.get('id') for m in zai_models if isinstance(m, dict) and m.get('id')]
+    if not zai_ids:
+        import pytest
+        pytest.skip("no zai catalog models to exercise the alias ownership guard")
+    owned = zai_ids[0]
+    model, provider, base_url = _resolve_with_providers(
+        owned,
+        {'openai': {'models': [owned]}},
+        provider='z-ai',        # aliased form the user may write in config
+    )
+    assert config._canonicalise_provider_id('z-ai') == 'zai'
+    assert provider == 'z-ai', (
+        "aliased active provider (z-ai→zai) that owns the model must not be "
+        f"hijacked by providers.openai.models; got {provider!r}"
+    )
