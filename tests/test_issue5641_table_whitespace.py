@@ -31,6 +31,7 @@ def test_table_rows_with_edge_whitespace_still_render_as_table(driver_path, src)
     out = _render(driver_path, src)
     assert "<table><thead>" in out
     assert "<td>1</td>" in out
+    assert "<p>" not in out
 
 
 def test_four_space_indented_table_like_block_stays_outside_table(driver_path):
