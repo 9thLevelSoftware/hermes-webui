@@ -1643,6 +1643,7 @@ def record_process_wakeup_provider_unavailable_pause(
         return None
     now = time.time()
     key = _process_wakeup_pause_key(model, provider, classification)
+    credential_state_fingerprint = process_wakeup_credential_state_fingerprint(session)
     existing = getattr(session, 'process_wakeup_pause', None)
     same_window = (
         isinstance(existing, dict)
@@ -1672,6 +1673,7 @@ def record_process_wakeup_provider_unavailable_pause(
         'last_error_at': now,
         'visible_error_count': visible_error_count,
         'suppressed_count': suppressed_count,
+        'credential_state_fingerprint': credential_state_fingerprint,
     }
     return session.process_wakeup_pause
 
@@ -1697,6 +1699,48 @@ def suppress_process_wakeup_for_provider_pause(
     pause['last_suppressed_reason'] = 'provider_unavailable_pause'
     session.process_wakeup_pause = pause
     return pause
+
+
+def process_wakeup_credential_state_fingerprint(session) -> str:
+    """Return a metadata-only fingerprint for credential/config state."""
+    try:
+        hermes_home = _get_profile_home(getattr(session, 'profile', None))
+    except Exception:
+        hermes_home = Path(os.environ.get('HERMES_HOME') or HOME).expanduser()
+    files = []
+    for name in ('auth.json', 'config.yaml', 'config.yml', '.env'):
+        path = hermes_home / name
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            files.append((name, 'missing'))
+        except OSError as exc:
+            files.append((name, 'error', exc.__class__.__name__))
+        else:
+            kind = 'file' if path.is_file() else 'other'
+            files.append((name, kind, int(stat.st_mtime_ns), int(stat.st_size)))
+    payload = {
+        'version': 1,
+        'profile': _process_wakeup_pause_part(getattr(session, 'profile', None)),
+        'files': files,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def process_wakeup_pause_credential_state_changed(session) -> bool:
+    """Return True when a stored credential pause should be revalidated."""
+    pause = getattr(session, 'process_wakeup_pause', None)
+    if not isinstance(pause, dict) or not pause.get('paused'):
+        return False
+    classification = _process_wakeup_pause_part(pause.get('classification'))
+    if classification not in PROCESS_WAKEUP_PROVIDER_UNAVAILABLE_TYPES:
+        return False
+    previous = str(pause.get('credential_state_fingerprint') or '').strip()
+    if not previous:
+        return True
+    return process_wakeup_credential_state_fingerprint(session) != previous
+
 
 def _get_profile_home(profile) -> Path:
     """Resolve the hermes agent home directory for the given profile.

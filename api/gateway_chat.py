@@ -30,7 +30,7 @@ from api.config import (
     update_active_run,
 )
 from api.helpers import _redact_text, redact_session_data
-from api.models import get_session, merge_session_messages_append_only
+from api.models import clear_process_wakeup_pause, get_session, merge_session_messages_append_only
 from api.run_journal import RunJournalWriter
 
 logger = logging.getLogger(__name__)
@@ -901,6 +901,7 @@ def _run_gateway_chat_streaming(
             s.workspace = str(workspace)
             s.model = model
             s.model_provider = model_provider
+            clear_process_wakeup_pause(s, reason="run_completed")
             s.save()
         try:
             from api.goals import evaluate_goal_after_turn, has_active_goal

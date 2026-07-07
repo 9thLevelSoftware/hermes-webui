@@ -165,6 +165,7 @@ def test_credential_empty_process_wakeup_pauses_repeated_automatic_turns(tmp_pat
     assert saved.process_wakeup_pause["paused"] is True
     assert saved.process_wakeup_pause["classification"] == "credential_pool_empty"
     assert saved.process_wakeup_pause["suppressed_count"] == 0
+    assert saved.process_wakeup_pause["credential_state_fingerprint"]
     context_before = list(saved.context_messages)
     messages_before = list(saved.messages)
 
@@ -194,6 +195,70 @@ def test_credential_empty_process_wakeup_pauses_repeated_automatic_turns(tmp_pat
     assert saved_after.context_messages == context_before
     assert saved_after.process_wakeup_pause["suppressed_count"] == 1
     assert "last_suppressed_at" in saved_after.process_wakeup_pause
+
+
+def test_process_wakeup_pause_revalidates_when_credential_state_changes(tmp_path, monkeypatch):
+    hermes_home = tmp_path / "hermes-home"
+    hermes_home.mkdir()
+    auth_json = hermes_home / "auth.json"
+    auth_json.write_text('{"credential_pool": {}}\n', encoding="utf-8")
+    monkeypatch.setattr(models, "_get_profile_home", lambda _profile: hermes_home)
+    session = Session(
+        session_id="wakeup_pause_credential_refresh",
+        workspace=str(tmp_path),
+        model="test-model",
+        model_provider="test-provider",
+    )
+    pause = models.record_process_wakeup_provider_unavailable_pause(
+        session,
+        classification="credential_pool_empty",
+        model="test-model",
+        provider="test-provider",
+    )
+    assert pause is not None
+    paused_fingerprint = pause["credential_state_fingerprint"]
+    session.save()
+    models.SESSIONS[session.session_id] = session
+
+    auth_json.write_text(
+        '{"credential_pool": {"test-provider": [{"id": "refilled-token"}]}}\n',
+        encoding="utf-8",
+    )
+    assert models.process_wakeup_credential_state_fingerprint(session) != paused_fingerprint
+
+    captured = {}
+
+    def _fake_start_run(s, **kwargs):
+        captured["source"] = kwargs.get("source")
+        captured["model"] = kwargs.get("model")
+        captured["model_provider"] = kwargs.get("model_provider")
+        return {"stream_id": "stream-credential-refresh", "session_id": s.session_id, "_status": 200}
+
+    monkeypatch.setattr(routes, "_resolve_chat_workspace_with_recovery", lambda _s, _w: str(tmp_path))
+    monkeypatch.setattr(routes, "_read_profile_model_config", lambda _s, _p: (None, None, {}))
+    monkeypatch.setattr(
+        routes,
+        "_resolve_compatible_session_model_state",
+        lambda *_args, **_kwargs: ("test-model", "test-provider", False),
+    )
+    monkeypatch.setattr(routes, "_start_run", _fake_start_run)
+
+    response = routes.start_session_turn(
+        session.session_id,
+        "[IMPORTANT: Background process completed after credential refill.]",
+        source="process_wakeup",
+    )
+
+    assert response["_status"] == 200
+    assert response["stream_id"] == "stream-credential-refresh"
+    assert captured == {
+        "source": "process_wakeup",
+        "model": "test-model",
+        "model_provider": "test-provider",
+    }
+    saved = Session.load(session.session_id)
+    assert saved is not None
+    assert saved.process_wakeup_pause == {}
 
 
 def test_stale_credential_empty_process_wakeup_still_records_pause(tmp_path):
@@ -302,6 +367,15 @@ def test_success_path_clears_process_wakeup_pause_after_late_cancel_checks():
 
     assert session_save_idx < post_save_cancel_idx < state_sync_idx
     assert state_sync_idx < final_cancel_idx < pause_clear_idx < done_payload_idx
+
+
+def test_gateway_success_path_clears_process_wakeup_pause_before_save():
+    src = Path(__file__).parent.parent.joinpath("api", "gateway_chat.py").read_text(encoding="utf-8")
+    pending_clear_idx = src.index("s.pending_user_source = None")
+    pause_clear_idx = src.index('clear_process_wakeup_pause(s, reason="run_completed")')
+    save_idx = src.index("s.save()", pause_clear_idx)
+
+    assert pending_clear_idx < pause_clear_idx < save_idx
 
 
 def test_process_wakeup_pause_does_not_suppress_explicit_non_wakeup_turn(tmp_path, monkeypatch):

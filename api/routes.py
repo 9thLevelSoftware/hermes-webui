@@ -8672,7 +8672,9 @@ from api.models import (
     is_cron_session,
     is_safe_session_id,
     PROCESS_WAKEUP_PAUSE_ERROR,
+    clear_process_wakeup_pause,
     clear_process_wakeup_pause_if_model_changed,
+    process_wakeup_pause_credential_state_changed,
     suppress_process_wakeup_for_provider_pause,
 )
 
@@ -19902,6 +19904,16 @@ def start_session_turn(
             )
     _paused_wakeup = None
     if turn_source == "process_wakeup":
+        if process_wakeup_pause_credential_state_changed(s):
+            if clear_process_wakeup_pause(s, reason='credential_state_changed'):
+                try:
+                    s.save(touch_updated_at=False)
+                except Exception:
+                    logger.debug(
+                        "failed to persist process_wakeup credential-state reset for session %s",
+                        session_id,
+                        exc_info=True,
+                    )
         _paused_wakeup = suppress_process_wakeup_for_provider_pause(
             s,
             model=model,
