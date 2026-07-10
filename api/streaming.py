@@ -8925,6 +8925,15 @@ def _run_agent_streaming(
                                 model=_turn_route_model,
                                 provider=_turn_route_provider,
                             )
+                            # Disclose the suppression so the silence reads as
+                            # intentional, not a stuck agent (#3929 UX): further
+                            # automatic wakeups for this session are now paused
+                            # until the user acts or credentials change.
+                            _err_hint = (
+                                (_err_hint + ' ' if _err_hint else '')
+                                + 'Automatic retries for this conversation are paused until you '
+                                + 'send a message, switch the model/provider, or fix the credentials.'
+                            )
                         _materialize_pending_user_turn_before_error(s)
                         s.active_stream_id = None
                         s.pending_user_message = None
