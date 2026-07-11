@@ -427,6 +427,37 @@ process.stdout.write(JSON.stringify({
     assert data["nil"] is None
 
 
+def test_timestamp_seconds_rejects_out_of_range_epochs_so_invalid_date_never_renders():
+    # A garbage huge numeric timestamp (e.g. 1e20) passes the finite/>0 checks but
+    # is far past JavaScript's max representable Date (±8.64e15 ms), so without a
+    # range guard new Date(stamp*1000) yields "Invalid Date" and would render
+    # literally in the worklog time label. (#5739 gate finding.)
+    data = _run_node(
+        """
+process.stdout.write(JSON.stringify({
+  huge: _timestampSeconds(1e20),
+  hugeMs: _timestampSeconds(1e20 * 1000),
+  normal: _timestampSeconds(1700000901),
+  normalMs: _timestampSeconds(1700000901000),
+  hugeLabel: _activityClockLabel(_timestampSeconds(1e20) || undefined),
+  normalLabel: _activityClockLabel(_timestampSeconds(1700000901)),
+}));
+"""
+    )
+
+    # garbage huge epochs (whether given as seconds or ms) resolve to null
+    assert data["huge"] is None
+    assert data["hugeMs"] is None
+    # a normal recent epoch still resolves, in both seconds and ms forms
+    assert data["normal"] == 1700000901
+    assert data["normalMs"] == 1700000901
+    # the clock label for a rejected timestamp must never be the literal "Invalid Date";
+    # a valid one produces a real time string.
+    assert "Invalid Date" not in (data["hugeLabel"] or "")
+    assert "Invalid Date" not in (data["normalLabel"] or "")
+    assert data["normalLabel"]
+
+
 def test_settled_anchor_scene_rows_use_row_created_at_timestamps():
     data = _run_node(
         """

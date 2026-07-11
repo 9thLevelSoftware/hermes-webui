@@ -5572,18 +5572,24 @@ function _timestampSeconds(value){
   if(value===undefined||value===null||value==='') return null;
   if(value instanceof Date){
     const stamp=value.getTime()/1000;
-    return Number.isFinite(stamp)&&stamp>0?stamp:null;
+    return (Number.isFinite(stamp)&&stamp>0&&Math.abs(stamp)<=8.64e12)?stamp:null;
   }
   const numeric=Number(value);
   if(Number.isFinite(numeric)&&numeric>0){
     const stamp=numeric>1e12?numeric/1000:numeric;
-    return Number.isFinite(stamp)&&stamp>0?stamp:null;
+    // Reject epochs outside JavaScript's valid Date range (±8.64e15 ms = ±8.64e12 s);
+    // otherwise new Date(stamp*1000) yields "Invalid Date" and renders literally
+    // (e.g. a garbage numeric timestamp like 1e20 passes finite/>0). (#5739 gate.)
+    return (Number.isFinite(stamp)&&stamp>0&&stamp<=8.64e12)?stamp:null;
   }
   if(typeof value==='string'){
     const text=value.trim();
     if(!text||/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(text)) return null;
     const parsed=Date.parse(text);
-    if(Number.isFinite(parsed)&&parsed>0) return parsed/1000;
+    if(Number.isFinite(parsed)&&parsed>0){
+      const stamp=parsed/1000;
+      return stamp<=8.64e12?stamp:null;
+    }
   }
   return null;
 }
